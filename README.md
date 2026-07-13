@@ -48,4 +48,24 @@ Pulled the Pydantic structured-output pattern (imports, `load_dotenv`, `BaseMode
 
 **New skill: `new-agent-script`** — scaffolds `scripts/<name>.py` from that boilerplate on request (e.g. "create a new script for X"). It re-reads `structured_outputs.py` fresh each time rather than caching a copy of the pattern, so if the boilerplate evolves later, new scaffolds automatically pick up the change.
 
+**Built a real agent from the boilerplate: ticket triage classifier** — [`scripts/structured_outputs.py`](scripts/structured_outputs.py)
+
+Turned the template into a working `customer_ticket_classifier` agent:
+
+```python
+class classify_tickets(BaseModel):
+    ticket_title: str
+    ticket_description: str
+    classification_result: Literal["high", "medium", "low"]
+```
+
+- Used `typing.Literal` to constrain `classification_result` to an enum-like set of exact strings, instead of a free-text field the model could drift on.
+- **Prompt design:** the initial instructions only gave criteria/examples for 'high' and 'low', never mentioned that the agent needed to *populate* `ticket_title`/`ticket_description` from the raw input, and had stray whitespace baked into the string from backslash line-continuations. Rewritten with explicit per-tier criteria (including 'medium'), a tie-breaking rule ("err toward the higher priority"), and implicit string concatenation (parenthesized adjacent string literals) instead of `\`-continuations to avoid leaking indentation into the prompt text.
+- Made it interactive via `input()`, reusing the same usage-tracking + cost-analysis block from `first_agent_1.py`.
+- **Dependency note:** `uv add`-ing `typing` pulled in the standalone PyPI `typing` backport package (`typing>=3.10.0.0`) even though this project requires Python ≥3.11, where `typing` is already stdlib. Harmless but unnecessary — left in as-is for now rather than removed.
+
+Example run (`"I have noticed unauthorised activity on my card on your website"`):
+
+![Terminal output: ticket classification with title/description/priority fields, token usage, and cost breakdown](assets/ticket_classifier_run.png)
+
 **Next up:** tool calling / function tools, multi-agent handoffs.

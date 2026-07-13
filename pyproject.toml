@@ -8,4 +8,5 @@ dependencies = [
     "dotenv>=0.9.9",
     "openai-agents>=0.18.2",
     "pydantic>=2.13.4",
+    "typing>=3.10.0.0",
 ]
