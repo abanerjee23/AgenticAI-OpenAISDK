@@ -26,16 +26,6 @@ Newest entries at the top. Each entry is a snapshot of what was learned/built th
 
 Example run (`"Has England ever won the world cup?"`):
 
-```
-Total input tokens  - 33
-Total output tokens - 54
-Total tokens overall - 87
-
-------Cost Analysis per Run------
-
-Cost of input tokens is  $0.0000247500
-Cost of output tokens is $0.0002430000
-Total cost is             $0.0002677500
-```
+![Terminal output: agent answer, token usage, and per-run cost breakdown](assets/first_agent_1_run.png)
 
 **Next up:** tool calling / function tools, multi-agent handoffs.
