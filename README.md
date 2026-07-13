@@ -28,4 +28,18 @@ Example run (`"Has England ever won the world cup?"`):
 
 ![Terminal output: agent answer, token usage, and per-run cost breakdown](assets/first_agent_1_run.png)
 
+**Structured outputs with Pydantic:** gave the agent an `output_type` instead of free-text —
+
+```python
+class llm_output(BaseModel):
+    description: str
+    fun_facts: str
+```
+
+Passed as `Agent(..., output_type=llm_output)`. `result.final_output` now comes back as a parsed `llm_output` instance rather than a raw string, so downstream code gets guaranteed fields instead of parsing prose. Added `pydantic` as an explicit dependency for this.
+
+Example run (`"How many goals has Messi scored in Fifa World Cups?"`):
+
+![Terminal output: structured output with description/fun_facts fields, token usage, and cost breakdown](assets/first_agent_1_structured_output.png)
+
 **Next up:** tool calling / function tools, multi-agent handoffs.

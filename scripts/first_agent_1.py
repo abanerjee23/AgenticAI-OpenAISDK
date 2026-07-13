@@ -1,23 +1,31 @@
 from agents import Agent, Runner
 from dotenv import load_dotenv
+from pydantic import BaseModel
 
 load_dotenv(override=True)
 
+""" Using Pydantic to produce structured outputs"""
+class llm_output(BaseModel):
+    description:str
+    fun_facts:str
+
+
+""" Agent is defined here. No API calls to the LLM takes place here."""
+footsy = Agent(name='footsy',
+               instructions="You are football expert. Answer user queries in a friendly and fun way.",
+               model="gpt-5.4-mini",
+               output_type=llm_output)
+
+user_query = input("Enter your trickiest question on football: ")
+print("\n")
+
+result = Runner.run_sync(footsy, input=user_query)
 """
 Runner.run_sync vs Runner.run endpoints?
 
 Answer to the above query is - if your main.py is a plain if __name__ == "__main__": script, use Runner.run_sync. If you're inside async def main() (recommended once you add tools/handoffs with concurrent calls), use await Runner.run(...).
 
 """
-
-footsy = Agent(name='footsy',
-               instructions="You are football expert. Answer user queries in a friendly and fun way.",
-               model="gpt-5.4-mini")
-
-user_query = input("Enter your trickiest question on football: ")
-print("\n")
-
-result = Runner.run_sync(footsy, input=user_query)
 usage = result.context_wrapper.usage
 print(result.final_output)
 print(f"Total input tokens - {usage.input_tokens}")
