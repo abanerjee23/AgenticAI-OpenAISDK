@@ -42,4 +42,10 @@ Example run (`"How many goals has Messi scored in Fifa World Cups?"`):
 
 ![Terminal output: structured output with description/fun_facts fields, token usage, and cost breakdown](assets/first_agent_1_structured_output.png)
 
+**Reusable boilerplate** — [`scripts/structured_outputs.py`](scripts/structured_outputs.py)
+
+Pulled the Pydantic structured-output pattern (imports, `load_dotenv`, `BaseModel` output class, `Agent` definition) out into its own template file, so every new experiment starts from the same skeleton instead of copy-pasting from the last script.
+
+**New skill: `new-agent-script`** — scaffolds `scripts/<name>.py` from that boilerplate on request (e.g. "create a new script for X"). It re-reads `structured_outputs.py` fresh each time rather than caching a copy of the pattern, so if the boilerplate evolves later, new scaffolds automatically pick up the change.
+
 **Next up:** tool calling / function tools, multi-agent handoffs.
