@@ -20,24 +20,26 @@ Commits the day's work and appends a new dated entry to the README's Progress Lo
 
 2. **Understand the change, not just the diff.** Skim the actual files that changed (new scripts, edited scripts) to understand *what was learned or built*, not just line-level diffs. Pull from the current conversation's context too if it explains the "why" behind the change (e.g. a design decision, a bug that was fixed, a concept that was learned).
 
-3. **Draft the entry.**
+3. **Always check for a recent screenshot — don't wait to be told.** Search `~/Desktop` for an image file modified recently (e.g. `find ~/Desktop -maxdepth 1 -iname "*.png" -mmin -30`). If one exists from around this session's activity, copy it into `assets/` (descriptive filename, e.g. `assets/<topic>_run.png`) and embed it in the entry with a markdown image tag and a short caption. This applies every time this skill runs, not just when the user explicitly attaches or mentions a screenshot.
+
+4. **Draft the entry.**
    - Date header: `### YYYY-MM-DD` (use today's actual date).
    - Short bullets: what was built, what was learned, any non-obvious decisions and why. Prefer specifics (function/file names, concrete numbers) over vague summaries like "made progress."
    - If there's a natural "what's next" thread, keep a `**Next up:**` line like prior entries.
    - Match the voice/format of existing entries in README.md — read a couple of them first.
 
-4. **Insert the entry.**
+5. **Insert the entry.**
    - Read the current `README.md`.
    - Insert the new dated section directly under the `## Progress Log` heading, **above** all existing dated entries (newest-first order).
    - Do not touch anything else in the file.
 
-5. **Stage and commit.**
+6. **Stage and commit.**
    - `git add` the specific changed/new files (never `git add -A`/`.` blindly — check `git status` output first and confirm nothing unexpected like `.env` is included; `.gitignore` should already exclude `.venv`/`.env`).
    - Commit message: short, describes the actual change (e.g. `Add cost analysis formatting + interactive input to first agent`), not "update README."
 
-6. **Push.**
+7. **Push.**
    - Push to `origin` on the current branch (`main`).
    - If `origin` isn't configured yet, ask the user for the remote URL rather than guessing.
    - If the push is rejected (remote has commits this branch doesn't), stop and surface that to the user — do not force-push.
 
-7. **Confirm.** Tell the user what was committed/pushed in 1-2 sentences — don't dump the full diff back at them.
+8. **Confirm.** Tell the user what was committed/pushed in 1-2 sentences — don't dump the full diff back at them.

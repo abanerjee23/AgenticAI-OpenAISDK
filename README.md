@@ -10,6 +10,22 @@ A hands-on learning log as I work through the [OpenAI Agents SDK](https://github
 
 Newest entries at the top. Each entry is a snapshot of what was learned/built that day — earlier entries are kept as-is so this doubles as a running history of the journey.
 
+### 2026-07-14
+
+**Built a tool-using agent: news reporter** — [`scripts/run_config_3.py`](scripts/run_config_3.py)
+
+- First agent with an actual **function tool**: `search_web`, a `@function_tool`-decorated wrapper around the Tavily search API (`TavilyClient.search(..., search_depth='advanced')`), passed to the agent via `tools=[search_web]`.
+- **System prompt** written to force real research over memorized answers: the agent must call `search_web`, refine/re-search on thin results, cross-check claims across sources, flag conflicting or developing stories explicitly, and publish in a fixed Headline / Summary / Details / Sources format.
+- **`RunConfig` + `ModelSettings`** used for the first time to control generation behavior (`verbosity`, `reasoning`) per run instead of only per-agent.
+- **Bug found and fixed:** `ModelSettings(reasoning='medium')` raised a Pydantic `ValidationError` — unlike `verbosity`, which takes a plain `Literal['low','medium','high']` string, `reasoning` expects a `Reasoning` object/dict with an `effort` key. Fix: `reasoning={"effort": "medium"}`.
+- Learned not every model supports every `ModelSettings` field — worth checking the [OpenAI platform docs](https://platform.openai.com/chat/edit?models) per-model before assuming a parameter (e.g. `temperature`, `tool_choice`) is honored.
+
+Example run (U.S.–Iran Strait of Hormuz conflict query):
+
+![Terminal output: news reporter agent's researched report with headline, summary, details, sources, and cost breakdown](assets/news_reporter_run.png)
+
+**Next up:** multi-agent handoffs.
+
 ### 2026-07-13
 
 **Built the first agent** — [`scripts/first_agent_1.py`](scripts/first_agent_1.py)
