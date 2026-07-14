@@ -24,6 +24,17 @@ Example run (U.S.–Iran Strait of Hormuz conflict query):
 
 ![Terminal output: news reporter agent's researched report with headline, summary, details, sources, and cost breakdown](assets/news_reporter_run.png)
 
+**Learned local context (the "backpack" pattern)** — [`scripts/context_management_4.py`](scripts/context_management_4.py) + [`scripts/database_context_management_4.py`](scripts/database_context_management_4.py)
+
+- Defined an `AppContext` dataclass (`user_name`, `db`) as a typed bag of app-local state that isn't part of the conversation and is never sent to the LLM — it's for tools to read from.
+- Passed it in via `Runner.run_sync(agent, input=..., context=app_state)`.
+- Tools that need it declare a first parameter typed `RunContextWrapper[AppContext]`; the actual object is at `wrapper.context`. Used this in `get_order_details` to look up an order from a fake `Database` class and personalize the reply with `state.user_name`.
+- **Dependency note:** same pattern as the earlier `typing` package — `uv add`-ing `dataclasses` pulled in the standalone PyPI `dataclasses>=0.8` backport, unnecessary on Python ≥3.11 where `dataclasses` is already stdlib. Left in, consistent with the earlier call to leave the `typing` backport alone too.
+
+Example run:
+
+![Terminal output: pizza order assistant using RunContextWrapper to personalize a reply with user_name and order lookup](assets/context_management_run.png)
+
 **Next up:** multi-agent handoffs.
 
 ### 2026-07-13
