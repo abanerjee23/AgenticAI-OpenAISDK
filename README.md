@@ -8,28 +8,100 @@ A hands-on learning log as I work through the [OpenAI Agents SDK](https://github
 
 ## Progress Log
 
-Newest entries at the top. Each entry is a snapshot of what was learned/built that day — earlier entries are kept as-is so this doubles as a running history of the journey.
+Newest entries at the top. Each milestone is documented as: **what the concept is**, **why it matters**, a couple of **example use cases**, and **the actual code I wrote** for it. Earlier entries are kept as-is once written — this doubles as a running history of the journey, not just a changelog.
 
 ### 2026-07-14
 
-**Built a tool-using agent: news reporter** — [`scripts/run_config_3.py`](scripts/run_config_3.py)
+#### Function tools (tool calling) — `scripts/run_config_3.py`
 
-- First agent with an actual **function tool**: `search_web`, a `@function_tool`-decorated wrapper around the Tavily search API (`TavilyClient.search(..., search_depth='advanced')`), passed to the agent via `tools=[search_web]`.
-- **System prompt** written to force real research over memorized answers: the agent must call `search_web`, refine/re-search on thin results, cross-check claims across sources, flag conflicting or developing stories explicitly, and publish in a fixed Headline / Summary / Details / Sources format.
-- **`RunConfig` + `ModelSettings`** used for the first time to control generation behavior (`verbosity`, `reasoning`) per run instead of only per-agent.
-- **Bug found and fixed:** `ModelSettings(reasoning='medium')` raised a Pydantic `ValidationError` — unlike `verbosity`, which takes a plain `Literal['low','medium','high']` string, `reasoning` expects a `Reasoning` object/dict with an `effort` key. Fix: `reasoning={"effort": "medium"}`.
-- Learned not every model supports every `ModelSettings` field — worth checking the [OpenAI platform docs](https://platform.openai.com/chat/edit?models) per-model before assuming a parameter (e.g. `temperature`, `tool_choice`) is honored.
+**Concept:** A function tool is a regular Python function decorated with `@function_tool` and handed to an agent via `tools=[...]`. The model can choose to call it mid-conversation, read its return value, and use that to inform its final answer — instead of answering purely from what it was trained on.
+
+**Why it matters:** An LLM's own knowledge is frozen at training time and can't see private data, live data, or take real-world actions. Tool calling is what turns a chatbot into an *agent* — it's the mechanism for grounding answers in fresh information and letting the model do things beyond generating text. This is the core building block behind RAG systems, coding agents, and anything that needs to act on the world.
+
+**Example use cases:**
+- A research/news assistant that must search the live web instead of guessing from stale training data (what I built below).
+- A support agent that looks up a customer's real order/account status from an internal database or API before responding.
+
+**What I built:** a `search_web` tool wrapping the Tavily search API, given to a "News Reporter" agent:
+
+```python
+@function_tool
+def search_web(user_search_query: str) -> str:
+    response = client.search(user_search_query, search_depth='advanced')
+    return response
+
+news_reporter_agent = Agent(name="News Reporter", instructions=(
+    "You are a news reporter. Given a user's query, research it using the search_web tool "
+    "and publish a detailed, well-organized report — do not answer from memory alone, and "
+    "do not fabricate facts, quotes, or sources. ..."
+), model="gpt-5.4-mini", tools=[search_web])
+```
+
+The system prompt does real work here: it forces the agent to call `search_web` rather than answer from memory, to refine/re-search when results are thin, to cross-check claims across multiple sources, and to flag conflicting or developing stories explicitly instead of silently picking one version. Output is published in a fixed Headline / Summary / Details / Sources format.
 
 Example run (U.S.–Iran Strait of Hormuz conflict query):
 
 ![Terminal output: news reporter agent's researched report with headline, summary, details, sources, and cost breakdown](assets/news_reporter_run.png)
 
-**Learned local context (the "backpack" pattern)** — [`scripts/context_management_4.py`](scripts/context_management_4.py) + [`scripts/database_context_management_4.py`](scripts/database_context_management_4.py)
+---
 
-- Defined an `AppContext` dataclass (`user_name`, `db`) as a typed bag of app-local state that isn't part of the conversation and is never sent to the LLM — it's for tools to read from.
-- Passed it in via `Runner.run_sync(agent, input=..., context=app_state)`.
-- Tools that need it declare a first parameter typed `RunContextWrapper[AppContext]`; the actual object is at `wrapper.context`. Used this in `get_order_details` to look up an order from a fake `Database` class and personalize the reply with `state.user_name`.
-- **Dependency note:** same pattern as the earlier `typing` package — `uv add`-ing `dataclasses` pulled in the standalone PyPI `dataclasses>=0.8` backport, unnecessary on Python ≥3.11 where `dataclasses` is already stdlib. Left in, consistent with the earlier call to leave the `typing` backport alone too.
+#### Run-time generation settings — `RunConfig` + `ModelSettings` — `scripts/run_config_3.py`
+
+**Concept:** `RunConfig`/`ModelSettings` let you control *how* the model generates on a given run — things like `verbosity`, `reasoning` effort, `temperature`, and `tool_choice` — separately from the agent's own fixed definition (`name`, `instructions`, `tools`). The agent defines *what* it is; the run config tunes *how it behaves this time*.
+
+**Why it matters:** Not every request needs the same cost/latency/quality tradeoff. A production system usually wants to dial these knobs per-request rather than hardcoding one setting into the agent forever — and not every model supports every knob, so this also becomes an integration detail to verify per-model rather than assume.
+
+**Example use cases:**
+- Spend more reasoning effort on a genuinely hard query, and less (cheaper, faster) on a simple lookup — without needing two separate agents.
+- Force tool use (`tool_choice="required"`) in a pipeline where skipping the tool (e.g. skipping retrieval in a RAG flow) would produce an ungrounded, unreliable answer.
+
+**What I built:**
+
+```python
+llm_response = Runner.run_sync(news_reporter_agent, user_search_query,
+                               run_config=RunConfig(
+                                   model_settings=ModelSettings(
+                                       verbosity='medium',
+                                       reasoning={"effort": "medium"},
+                                   )
+                               ))
+```
+
+**Bug found and fixed:** `ModelSettings(reasoning='medium')` raised a Pydantic `ValidationError`. Unlike `verbosity`, which takes a plain `Literal['low','medium','high']` string, `reasoning` expects a `Reasoning` object/dict with an `effort` key — fixed with `reasoning={"effort": "medium"}`. Also learned not every model supports every `ModelSettings` field (e.g. `temperature`, `tool_choice`), so it's worth checking the [OpenAI platform docs](https://platform.openai.com/chat/edit?models) per-model rather than assuming a parameter is honored.
+
+---
+
+#### Context management — the "backpack" pattern via `RunContextWrapper` — `scripts/context_management_4.py`
+
+**Concept:** `RunContextWrapper[T]` lets you pass a typed, app-local object (a dataclass, a DB handle, a user profile — anything) into a run, which tools can read from — **without it ever being sent to the LLM as text**. The model never sees the raw context object; only the tool code does. This is distinct from conversation input, which the model *does* see.
+
+**Why it matters:** Real applications carry state the model shouldn't need to reason over directly — session data, database connections, credentials, per-user identity — and stuffing all of that into the prompt would be expensive, leaky, and unreliable (the model could hallucinate over it or it could bloat the context window). This pattern keeps that state where it belongs: in code, accessible to tools, invisible to the model's context.
+
+**Example use cases:**
+- A multi-tenant app where each request needs to inject a different user's identity/session and a live DB connection into tool calls, without changing the agent's prompt per user.
+- Passing feature flags, API clients, or auth tokens into tools cleanly, instead of threading them through global state or re-authenticating inside every tool.
+
+**What I built:** an `AppContext` dataclass carrying a `user_name` and a `Database` instance, injected into a pizza-order lookup tool:
+
+```python
+@dataclass
+class AppContext:
+    user_name: str
+    db: Database
+
+app_state = AppContext(user_name='Alice', db=db)
+
+@function_tool
+def get_order_details(wrapper: RunContextWrapper[AppContext], order_id: str):
+    state = wrapper.context
+    order = state.db.get_order(order_id)
+    return f"Hello {state.user_name}. Your order with {order_id} of {order['pizza']} is currently {order['status']}. Hope you enjoy your pizza!"
+
+result = Runner.run_sync(order_status_agent, input="Where's my order with order id 123?",
+                         context=app_state)
+```
+
+**Dependency note:** same pattern as the `typing` package below — `uv add`-ing `dataclasses` pulled in the standalone PyPI `dataclasses>=0.8` backport, unnecessary on Python ≥3.11 where `dataclasses` is already stdlib. Left in intentionally, consistent with the earlier call to leave the `typing` backport alone too.
 
 Example run:
 
@@ -39,60 +111,110 @@ Example run:
 
 ### 2026-07-13
 
-**Built the first agent** — [`scripts/first_agent_1.py`](scripts/first_agent_1.py)
+#### Running an agent — `Runner.run_sync` vs `Runner.run`, usage & cost tracking — `scripts/first_agent_1.py`
 
-- Created `footsy`, a football-expert `Agent` (friendly/fun persona) running on `gpt-5.4-mini`, invoked via `Runner.run_sync`.
-- **`Runner.run_sync` vs `Runner.run`:** both take identical parameters — `run` is `async` (use inside an existing event loop / `async def main()`), `run_sync` is a synchronous wrapper around it (`run_until_complete` under the hood) for plain scripts. Documented directly in the script as a learning note.
-- Made the script interactive — takes the user's football question via `input()` instead of a hardcoded prompt.
-- **Usage tracking:** pulled `result.context_wrapper.usage` to report input/output/total token counts per run.
-- **Cost analysis per run:** calculated actual dollar cost from token usage —
-  - input cost = `(input_tokens / 1_000_000) * $0.75`
-  - output cost = `(output_tokens / 1_000_000) * $4.50`
-  - plus a **total cost** line (input + output combined)
-  - Formatting iterated from raw floats (unreadable scientific notation like `2.475e-05`) → 4 decimal places (rounded tiny input costs to `$0.0000`, hiding real signal) → **10 decimal places**, settled on for enough precision to see true per-run cost at this token scale.
+**Concept:** `Runner` is what actually executes an `Agent` against an input and returns a `RunResult`. `Runner.run(...)` is `async` — use it inside an existing event loop (e.g. `async def main()`, a FastAPI handler). `Runner.run_sync(...)` is a synchronous wrapper around the same thing (`run_until_complete` under the hood) for plain top-level scripts with no event loop. Every `RunResult` also carries `result.context_wrapper.usage` — exact input/output/total token counts for that run.
+
+**Why it matters:** Picking the wrong runner blocks or breaks concurrency in an async app; picking the right one is a one-line decision once you know the rule. Usage/cost tracking matters even more — LLM APIs are metered per token, so without visibility into usage you can't answer "what does this feature cost to run" or catch a runaway prompt before it shows up on a bill.
+
+**Example use cases:**
+- A synchronous CLI script or notebook (`run_sync`) vs. a FastAPI endpoint serving many concurrent users (`run`), where blocking the event loop on one request would stall every other request.
+- Logging per-request cost to a dashboard so a product team can see cost-per-conversation before scaling a feature.
+
+**What I built:** an interactive football-trivia agent (`footsy`) with per-run cost analysis:
+
+```python
+footsy = Agent(name='footsy',
+               instructions="You are football expert. Answer user queries in a friendly and fun way.",
+               model="gpt-5.4-mini")
+
+result = Runner.run_sync(footsy, input=user_query)
+usage = result.context_wrapper.usage
+
+input_cost = (usage.input_tokens/1000000)*0.75
+output_cost = (usage.output_tokens/1000000)*4.5
+total_cost = input_cost + output_cost
+print(f"Cost of input tokens is ${input_cost:.10f}")
+print(f"Cost of output tokens is ${output_cost:.10f}")
+print(f"Total cost is ${total_cost:.10f}")
+```
+
+Cost-display formatting iterated from raw floats (unreadable scientific notation like `2.475e-05`) → 4 decimal places (rounded tiny input costs to `$0.0000`, hiding real signal) → **10 decimal places**, settled on for enough precision to see true per-run cost at this token scale.
 
 Example run (`"Has England ever won the world cup?"`):
 
 ![Terminal output: agent answer, token usage, and per-run cost breakdown](assets/first_agent_1_run.png)
 
-**Structured outputs with Pydantic:** gave the agent an `output_type` instead of free-text —
+---
+
+#### Structured outputs with Pydantic — `scripts/first_agent_1.py`, `scripts/structured_outputs_2.py`
+
+**Concept:** Passing `output_type=<PydanticModel>` to an `Agent` constrains the model's final response to match that schema. Instead of `result.final_output` being a raw string you have to parse, it comes back as a validated instance of your model with guaranteed fields and types.
+
+**Why it matters:** Free-text output is fine for a chat UI but unusable as a system boundary — downstream code (a database write, an API call, a routing decision) needs a contract it can trust, not prose to regex-parse. Structured outputs turn an LLM call into something closer to a typed function: predictable shape in, predictable shape out.
+
+**Example use cases:**
+- Extracting structured fields (name, date, amount) from an invoice or email so they can be written straight into a database.
+- Generating a response a frontend can render directly (e.g. `{title, body, cta_label}`) without any string-parsing glue code.
+
+**What I built:**
 
 ```python
 class llm_output(BaseModel):
     description: str
     fun_facts: str
+
+footsy = Agent(name='footsy', instructions="...", model="gpt-5.4-mini", output_type=llm_output)
 ```
 
-Passed as `Agent(..., output_type=llm_output)`. `result.final_output` now comes back as a parsed `llm_output` instance rather than a raw string, so downstream code gets guaranteed fields instead of parsing prose. Added `pydantic` as an explicit dependency for this.
+`result.final_output` now comes back as a parsed `llm_output` instance. Added `pydantic` as an explicit dependency for this.
 
 Example run (`"How many goals has Messi scored in Fifa World Cups?"`):
 
 ![Terminal output: structured output with description/fun_facts fields, token usage, and cost breakdown](assets/first_agent_1_structured_output.png)
 
-**Reusable boilerplate** — [`scripts/structured_outputs.py`](scripts/structured_outputs.py)
+---
 
-Pulled the Pydantic structured-output pattern (imports, `load_dotenv`, `BaseModel` output class, `Agent` definition) out into its own template file, so every new experiment starts from the same skeleton instead of copy-pasting from the last script.
+#### Constraining fields with `Literal` — ticket triage classifier — `scripts/structured_outputs_2.py`
 
-**New skill: `new-agent-script`** — scaffolds `scripts/<name>.py` from that boilerplate on request (e.g. "create a new script for X"). It re-reads `structured_outputs.py` fresh each time rather than caching a copy of the pattern, so if the boilerplate evolves later, new scaffolds automatically pick up the change.
+**Concept:** `typing.Literal["high", "medium", "low"]` used as a Pydantic field type restricts that field to an exact, closed set of string values — an enum-like constraint enforced by the schema, not just requested by prompt wording.
 
-**Built a real agent from the boilerplate: ticket triage classifier** — [`scripts/structured_outputs.py`](scripts/structured_outputs.py)
+**Why it matters:** Classification/routing tasks break if the model is free to invent its own label spelling or casing ("High priority!" vs `"high"`). Constraining the field at the schema level, on top of a structured `output_type`, removes an entire class of downstream parsing/matching bugs — the field is guaranteed to be one of exactly three values, full stop.
 
-Turned the template into a working `customer_ticket_classifier` agent:
+**Example use cases:**
+- Support ticket routing/triage (what I built), where the priority field feeds directly into a queueing or alerting system.
+- Intent classification for a chatbot router, where the output selects which downstream agent/flow handles the message next.
+
+**What I built:** turned the structured-output boilerplate into a working `customer_ticket_classifier` agent:
 
 ```python
 class classify_tickets(BaseModel):
     ticket_title: str
     ticket_description: str
     classification_result: Literal["high", "medium", "low"]
+
+customer_ticket_classifier = Agent(name="customer_ticket_classifier",
+                       instructions=(...),  # see script for full per-tier criteria
+                       model="gpt-5.4-mini",
+                       output_type=classify_tickets)
 ```
 
-- Used `typing.Literal` to constrain `classification_result` to an enum-like set of exact strings, instead of a free-text field the model could drift on.
-- **Prompt design:** the initial instructions only gave criteria/examples for 'high' and 'low', never mentioned that the agent needed to *populate* `ticket_title`/`ticket_description` from the raw input, and had stray whitespace baked into the string from backslash line-continuations. Rewritten with explicit per-tier criteria (including 'medium'), a tie-breaking rule ("err toward the higher priority"), and implicit string concatenation (parenthesized adjacent string literals) instead of `\`-continuations to avoid leaking indentation into the prompt text.
-- Made it interactive via `input()`, reusing the same usage-tracking + cost-analysis block from `first_agent_1.py`.
-- **Dependency note:** `uv add`-ing `typing` pulled in the standalone PyPI `typing` backport package (`typing>=3.10.0.0`) even though this project requires Python ≥3.11, where `typing` is already stdlib. Harmless but unnecessary — left in as-is for now rather than removed.
+**Prompt design:** the initial instructions only gave criteria/examples for 'high' and 'low', never mentioned that the agent needed to *populate* `ticket_title`/`ticket_description` from the raw input, and had stray whitespace baked into the string from backslash line-continuations. Rewritten with explicit per-tier criteria (including 'medium'), a tie-breaking rule ("err toward the higher priority"), and implicit string concatenation (parenthesized adjacent string literals) instead of `\`-continuations to avoid leaking indentation into the prompt text.
+
+**Dependency note:** `uv add`-ing `typing` pulled in the standalone PyPI `typing` backport package (`typing>=3.10.0.0`) even though this project requires Python ≥3.11, where `typing` is already stdlib. Harmless but unnecessary — left in as-is rather than removed.
 
 Example run (`"I have noticed unauthorised activity on my card on your website"`):
 
 ![Terminal output: ticket classification with title/description/priority fields, token usage, and cost breakdown](assets/ticket_classifier_run.png)
+
+---
+
+#### Project tooling: reusable boilerplate & the `new-agent-script` skill
+
+**Concept:** Pulled the Pydantic structured-output pattern (imports, `load_dotenv`, `BaseModel` output class, `Agent` definition) out into its own template file (`structured_outputs.py`, later renamed `structured_outputs_2.py`), and built a Claude Code skill, `new-agent-script`, that scaffolded new `scripts/<name>.py` files from that template on request — re-reading the template fresh each time rather than caching a copy, so future edits to the pattern would propagate automatically.
+
+**Why it matters:** not an AI/agent concept, but a development-velocity one — every new experiment started from the same correct skeleton instead of copy-pasting (and copy-pasting bugs) from the last script. This is the kind of tooling investment that pays off as the number of scripts grows.
+
+**Note:** this skill was later removed from the project; kept here as part of the historical record of what was tried.
 
 **Next up:** tool calling / function tools, multi-agent handoffs.

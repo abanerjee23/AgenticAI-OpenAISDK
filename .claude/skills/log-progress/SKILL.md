@@ -22,11 +22,13 @@ Commits the day's work and appends a new dated entry to the README's Progress Lo
 
 3. **Always check for a recent screenshot — don't wait to be told.** Search `~/Desktop` for an image file modified recently (e.g. `find ~/Desktop -maxdepth 1 -iname "*.png" -mmin -30`). If one exists from around this session's activity, copy it into `assets/` (descriptive filename, e.g. `assets/<topic>_run.png`) and embed it in the entry with a markdown image tag and a short caption. This applies every time this skill runs, not just when the user explicitly attaches or mentions a screenshot.
 
-4. **Draft the entry.**
-   - Date header: `### YYYY-MM-DD` (use today's actual date).
-   - Short bullets: what was built, what was learned, any non-obvious decisions and why. Prefer specifics (function/file names, concrete numbers) over vague summaries like "made progress."
+4. **Draft the entry.** Date header: `### YYYY-MM-DD` (use today's actual date). Under it, one subsection per distinct concept/milestone touched this session (`#### <Concept Name> — path/to/script.py`), each covering all four of:
+   - **Concept:** 1-3 sentences on what the concept/technique actually is.
+   - **Why it matters:** why this matters in a real/production AI system, not just "because the SDK has it."
+   - **Example use cases:** 2 concrete scenarios beyond the toy example just built.
+   - **What I built:** the real code written for it (a snippet, not the whole file) plus any non-obvious decisions, bugs found and fixed, or dependency notes — specifics (function/file names, concrete numbers) beat vague summaries like "made progress."
    - If there's a natural "what's next" thread, keep a `**Next up:**` line like prior entries.
-   - Match the voice/format of existing entries in README.md — read a couple of them first.
+   - Match the voice/format of existing entries in README.md — read a couple of them first. If a session only extends one existing concept's script further, extend that concept's subsection rather than making a new one.
 
 5. **Insert the entry.**
    - Read the current `README.md`.
