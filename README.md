@@ -10,6 +10,133 @@ A hands-on learning log as I work through the [OpenAI Agents SDK](https://github
 
 Newest entries at the top. Each milestone is documented as: **what the concept is**, **why it matters**, a couple of **example use cases**, and **the actual code I wrote** for it. Earlier entries are kept as-is once written — this doubles as a running history of the journey, not just a changelog.
 
+### 2026-07-15
+
+#### Mini project: Refund Processing app — guardrails, handoffs & human-in-the-loop — `scripts/guardrails_5.py`, `scripts/guardrails_db.py`
+
+First multi-agent app, pulling together everything so far plus three new concepts: **input guardrails**, **agent handoffs**, and **multi-turn conversation loops**. The scenario: orders flagged by a FinOps team for refund requests. Customers can ask for their order's status or request a refund; small refunds process automatically, high-value ones escalate to a human.
+
+**Architecture:**
+
+```mermaid
+flowchart TD
+    U[Customer message] --> G{Input guardrail<br/>gpt-5.4-mini classifier}
+    G -- off-topic / prompt injection --> X[Tripwire: request refused]
+    G -- on-topic --> T[Triage Agent<br/>routing only, no tools]
+    T -- status / value query --> S[read_order_status agent<br/>tools: order_status, order_value]
+    T -- refund request --> R[process_refund agent<br/>tool: process_refund]
+    S --> DB[(DataBase<br/>guardrails_db.py)]
+    R --> DB
+    DB -- ownership check fails --> R
+    DB -- "> $1000 → status: under_review" --> H[Human review queue<br/>FinOps team]
+    DB -- "≤ $1000 & eligible → processed" --> R
+```
+
+---
+
+**Input guardrails — `@input_guardrail` + tripwires**
+
+**Concept:** An input guardrail is a function that runs alongside the main agent when input arrives. Mine runs a small, cheap classifier agent (`gpt-5.4-mini` with a Pydantic `output_type`) that labels the message on-topic/off-topic, and returns a `GuardrailFunctionOutput` whose `tripwire_triggered` flag, when true, aborts the run by raising `InputGuardrailTripwireTriggered` — before the main (more expensive) agent does any real work.
+
+**Why it matters:** The first line of defense in any user-facing agent. It bounces off-topic use, prompt-injection attempts ("ignore previous instructions"), and attempts to extract other customers' data — at the cost of one cheap classifier call instead of a full agent run with tool access.
+
+**Example use cases:**
+- A customer-support bot that refuses to be used as a free general-purpose ChatGPT.
+- A pre-screen that blocks prompt-injection patterns before they reach an agent that holds tools with real side effects (refunds, emails, DB writes).
+
+**What I built:**
+
+```python
+@input_guardrail
+async def check_incoming_message(ctx: RunContextWrapper[None], agent: Agent, user_input: str) -> GuardrailFunctionOutput:
+    result = await Runner.run(input_guardrail_agent, user_input, context=ctx.context)
+    return GuardrailFunctionOutput(
+        output_info=result.final_output,
+        tripwire_triggered=result.final_output.is_off_topic
+    )
+```
+
+**Bugs found and fixed:** (1) guardrail functions must accept `(ctx, agent, input)` — mine originally took just the input string and broke at runtime; (2) `Runner.run_sync` can't be called inside the guardrail because it already runs inside the agent's event loop — had to make the guardrail `async` and `await Runner.run(...)`; (3) the field on `GuardrailFunctionOutput` is `tripwire_triggered` (a bool) — I'd originally tried to assign the `InputGuardrailTripwireTriggered` *exception class* to it.
+
+---
+
+**Multi-agent handoffs — triage → specialists**
+
+**Concept:** `handoffs=[...]` lets one agent transfer the conversation to another agent entirely (vs. `tools=[...]`, where the agent stays in charge and just calls a function). The triage agent owns routing and nothing else — it has no tools, and its instructions explicitly forbid answering directly.
+
+**Why it matters:** Separation of concerns for agents. Each specialist gets a narrow prompt and only the tools it needs (least privilege) — the status agent physically cannot process a refund because it doesn't hold that tool. Routing quality, read behavior, and write behavior can then be tuned independently.
+
+**Example use cases:**
+- A support desk that routes billing vs. technical vs. account questions to different specialist agents with different tool access.
+- An internal assistant that hands off between a read-only reporting agent and a write-capable admin agent, so write access is structurally isolated.
+
+**What I built:** three agents — `triage_agent` (guardrailed entry point, `handoffs=[read_order_status_agent, process_refund_agent]`), `read_order_status_agent` (tools: `order_status`, `order_value`), and `process_refund_agent` (tool: `process_refund`).
+
+---
+
+**Business rules belong in code, not prompts — deterministic guardrails + human-in-the-loop**
+
+**Concept:** Prompt instructions ("only refund the customer's own order") are suggestions the model can be talked out of; code is not. All enforcement lives in the `DataBase` layer: ownership verification (order's `customer_email` must match), a status state machine (`received → under_review → processed`, no double refunds, no auto-refund while under review), and an `AUTO_REFUND_LIMIT = 1000` threshold above which the order *transitions to* `under_review` — i.e. the human-review queue — instead of processing.
+
+**Why it matters:** This is the human-in-the-loop pattern done structurally: the LLM can't be prompt-injected past a `PermissionError`. The escalation isn't an error, it's a state transition — a follow-up status query truthfully reports "with the finance team for review." And the agents need zero knowledge of the rules; they just relay outcomes, so readers of the DB never drift out of sync with the rules.
+
+**Example use cases:**
+- Any agent with spend authority (refunds, discounts, credits) where per-transaction limits must be enforced even against adversarial input.
+- Compliance flows where certain state transitions (account closure, data deletion) always require a human sign-off.
+
+**What I built:**
+
+```python
+def process_refund(self, order_id, customer_email):
+    order = self._get_order(order_id)
+    if order['customer_email'] != customer_email:
+        raise PermissionError(f"Order {order_id} does not belong to this customer.")
+    if order['order_status'] == 'processed':
+        raise ValueError(f"Refund for {order_id} has already been processed.")
+    if order['order_status'] == 'under_review':
+        raise ValueError(f"Order {order_id} is under FinOps review and cannot be auto-refunded.")
+    if order['order_value'] > AUTO_REFUND_LIMIT:
+        order['order_status'] = 'under_review'
+        raise ValueError(f"Order {order_id} exceeds the ${AUTO_REFUND_LIMIT} auto-refund limit "
+                         "and has been escalated to FinOps for human review.")
+    order['order_status'] = 'processed'
+    return order['order_status']
+```
+
+The tool wrapper catches these exceptions and returns the message as a string, so the model receives the actual reason and explains it to the customer instead of the run crashing — **exceptions for code, strings for the model** at the tool boundary. Two supporting decisions: `order_value` is stored as a plain `int` and only formatted as `"$200"` at the read boundary (no `$`-string parsing loopholes in the money comparison), and `_get_order` normalizes any ID phrasing (`"104"`, `"order ID 104"`, `"ORDER-104"`) to `order_104` via regex — users don't speak in DB keys, and normalizing deterministically in code beats hoping the LLM formats it right.
+
+---
+
+**Multi-turn conversation loop — `to_input_list()` + `last_agent`**
+
+**Concept:** A single `Runner.run_sync` call is one-shot — the script printed one reply ("please send the email on the order") and exited. A conversational app loops: each turn appends the user message, runs, then carries forward `result.to_input_list()` (full history) and `result.last_agent` (so a handoff *sticks* — the refund specialist keeps the conversation instead of re-triaging from scratch every turn).
+
+**Why it matters:** Real support conversations are multi-turn by nature (agent asks for the email → customer provides it → refund proceeds). Without `last_agent`, every turn would restart at triage and lose the specialist's place in the flow.
+
+**What I built:**
+
+```python
+current_agent = triage_agent
+conversation = []
+while True:
+    user_input = input("You: ")
+    conversation.append({"role": "user", "content": user_input})
+    try:
+        result = Runner.run_sync(current_agent, conversation)
+    except InputGuardrailTripwireTriggered:
+        print("Assistant: Sorry, I can only help with order status and refund requests.")
+        continue
+    print(f"Assistant: {result.final_output}")
+    conversation = result.to_input_list()
+    current_agent = result.last_agent
+```
+
+Example run — status query for `order 103` answered in plain language ("Your refund has been completed", not the raw `processed` code), then a refund request for the $20,000 `order 104` correctly escalated to manual review instead of auto-processing:
+
+![Terminal output: multi-turn conversation — status lookup for order 103, then a high-value refund request for order 104 escalated to finance review](assets/refund_app_conversation_run.png)
+
+**Next up:** output guardrails, and applying the ownership check to status/value reads (right now anyone can query any order's status).
+
 ### 2026-07-14
 
 #### Function tools (tool calling) — `scripts/run_config_3.py`
