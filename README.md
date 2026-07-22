@@ -72,6 +72,32 @@ This is what lets `main_agent` ask a clarifying question ("what's your target ci
 
 **Next up:** the session ID here is a single hardcoded string, so every run of the script shares one conversation thread — a real multi-user version would need a session ID derived per user/request instead.
 
+---
+
+**Input guardrails — gatekeeping a multi-agent pipeline, not just a single agent**
+
+**Concept:** Same `@input_guardrail` + tripwire pattern as the refund app: a small classifier agent (`user_input_gr_agent`, `gpt-5.4-mini`, `output_type=InputGuardrailCheck` with an `is_off_topic: bool`) runs via the `input_gr_trigger` guardrail function before `main_agent` ever sees the message. If `is_off_topic` is true, `GuardrailFunctionOutput.tripwire_triggered` aborts the run by raising `InputGuardrailTripwireTriggered`.
+
+**Why it matters here specifically:** this app's per-turn cost is much higher than the refund app's — one on-topic turn can trigger `main_agent` plus up to two specialist sub-agents (`col_specialist`, `income_tax_specialist`), each of which may call `search_web` (Tavily) and `convert_currency`. Blocking off-topic input with a single cheap classifier call before that multi-agent, multi-tool pipeline ever runs matters a lot more here than in a single-agent app — both for cost and latency. Its job in this project specifically is keeping the assistant scoped to relocation/cost-of-living/tax comparison only, refusing to be used as a general-purpose chatbot.
+
+**What I built:**
+
+```python
+class InputGuardrailCheck(BaseModel):
+    is_off_topic: bool
+    reason: str
+
+@input_guardrail
+async def input_gr_trigger(ctx: RunContextWrapper[None], agent: Agent, user_input: str) -> GuardrailFunctionOutput:
+    result = await Runner.run(user_input_gr_agent, user_input, context=ctx.context)
+    return GuardrailFunctionOutput(
+        output_info=result.final_output,
+        tripwire_triggered=result.final_output.is_off_topic
+    )
+```
+
+**Bug found and fixed:** the guardrail's original instructions said the user should provide the target/current location "when asked" — implying it only accepted messages that were answers to a prior question. A live test caught this: "I'm moving from Austin, USA to Lisbon, Portugal" (a valid unprompted opening statement already containing both locations) was incorrectly flagged off-topic, blocking the entire flow on the very first turn. Fixed by rewriting the instructions to explicitly enumerate what counts as on-topic — unprompted opening statements with location info, greetings/general openers before any location has been given (e.g. "hi"), answers to clarifying questions, and follow-ups about a comparison already in progress — and narrowing off-topic to genuinely unrelated requests, general-chatbot use, or prompt-injection attempts to override the instructions. Verified on retest that both a bare greeting and a full one-message answer now pass correctly.
+
 ### 2026-07-15
 
 #### Mini project: Refund Processing app — guardrails, handoffs & human-in-the-loop — `scripts/guardrails_5.py`, `scripts/guardrails_db.py`
