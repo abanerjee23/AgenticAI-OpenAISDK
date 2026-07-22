@@ -10,6 +10,68 @@ A hands-on learning log as I work through the [OpenAI Agents SDK](https://github
 
 Newest entries at the top. Each milestone is documented as: **what the concept is**, **why it matters**, a couple of **example use cases**, and **the actual code I wrote** for it. Earlier entries are kept as-is once written — this doubles as a running history of the journey, not just a changelog.
 
+### 2026-07-22
+
+#### Mini project: Cost of Living & Taxation comparison app — `scripts/mini-project-1/main.py`
+
+Second multi-agent app. Given a target and current city/country, it researches and compares cost of living and income tax between them. Two concepts new to this build: **agents-as-tools** for fan-out/fan-in orchestration, and **sessions** for automatic conversation memory.
+
+---
+
+**Agents-as-tools — orchestrator stays in control**
+
+**Concept:** `Agent.as_tool(tool_name=..., tool_description=...)` wraps a whole agent as a callable tool for another agent. Unlike `handoffs=[...]`, which permanently transfers the conversation to the specialist, `as_tool()` keeps the calling agent in charge: it invokes the wrapped agent with a natural-language `input` string the model composes itself (not a typed parameter schema like `function_tool`), waits for it to run to completion, and gets its `final_output` back as the tool result before continuing its own turn.
+
+**Why it matters:** Some orchestration needs the "owner" agent to survive past the specialist call — a fan-out/fan-in pattern where multiple specialists' outputs have to be merged into one final answer. Handoffs can't do that, because control never returns. It's the structural difference between "route and disappear" and "delegate and synthesize."
+
+**Example use cases:**
+- A research assistant that queries three domain-specific sub-agents (finance, legal, technical) and writes one combined memo.
+- A trip planner that calls a flights sub-agent and a hotels sub-agent, then produces a single itinerary referencing both.
+
+**What I built:**
+
+```python
+col_specialist_tool = col_specialist.as_tool(
+    tool_name="get_cost_of_living",
+    tool_description="Call with a city and country to retrieve a cost-of-living breakdown.",
+)
+income_tax_specialist_tool = income_tax_specialist.as_tool(
+    tool_name="get_taxation_info",
+    tool_description="Call with a city and country to retrieve income tax information.",
+)
+main_agent = Agent(
+    name="Main Agent",
+    tools=[col_specialist_tool, income_tax_specialist_tool],
+    ...
+)
+```
+
+Chose this over handoffs deliberately: the refund app's `triage_agent` uses `handoffs=[...]` because each specialist there owns the rest of the conversation once routed, but here `main_agent` has to stay in charge to merge two specialists' results into one `ComparisonReport` — a handoff to either specialist would have stranded the other's data. Bonus: when the model calls both tools in the same turn, the SDK dispatches them concurrently, no extra async code required.
+
+---
+
+**Sessions — persistent conversation memory via `SQLiteSession`**
+
+**Concept:** `SQLiteSession(session_id, db_path)` gives an agent automatic, persistent conversation memory. Pass `session=session` to `Runner.run` / `Runner.run_streamed` and the SDK reads prior turns from the sqlite file before the call and appends the new ones after — no manual history list to maintain.
+
+**Why it matters:** Replaces a pattern I'd been hand-rolling since the refund app (`conversation = []` + `result.to_input_list()` every turn). That works for a single in-memory script run, but doesn't survive a process restart and doesn't generalize to a real deployment where each user needs an isolated thread. Sessions make memory a swappable backend (sqlite here; same interface could point at Redis/Postgres in production) instead of ad hoc list-passing in the calling code.
+
+**Example use cases:**
+- A CLI tool where conversation continuity should persist across separate script runs, not just within one process.
+- A multi-user web app where each user needs an isolated conversation thread, keyed by their own session ID.
+
+**What I built:**
+
+```python
+session = SQLiteSession("cost_of_living_app", "conversation_history.db")
+
+result = Runner.run_streamed(main_agent, user_query, session=session)
+```
+
+This is what lets `main_agent` ask a clarifying question ("what's your target city?") on one turn and correctly use the answer on the next, without the calling code tracking any history itself.
+
+**Next up:** the session ID here is a single hardcoded string, so every run of the script shares one conversation thread — a real multi-user version would need a session ID derived per user/request instead.
+
 ### 2026-07-15
 
 #### Mini project: Refund Processing app — guardrails, handoffs & human-in-the-loop — `scripts/guardrails_5.py`, `scripts/guardrails_db.py`

@@ -9,6 +9,7 @@ dependencies = [
     "dotenv>=0.9.9",
     "openai-agents>=0.18.2",
     "pydantic>=2.13.4",
+    "rich>=15.0.0",
     "tavily-python>=0.7.26",
     "typing>=3.10.0.0",
 ]

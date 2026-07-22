@@ -11,3 +11,8 @@ wheels/
 
 # Environment variables
 .env
+
+# Session/runtime data
+conversation_history.db
+conversation_history.db-shm
+conversation_history.db-wal
